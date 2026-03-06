@@ -1,4 +1,3 @@
-from cgi import test
 import logging
 import time
 import os
@@ -14,7 +13,7 @@ from sklearn.metrics import f1_score
 torch.cuda.empty_cache()
 import torch_geometric.transforms as T
 from torch_geometric.datasets import Planetoid
-from torch_geometric.data import NeighborSampler
+from torch_geometric.loader import NeighborSampler
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
 import numpy as np
 

@@ -22,7 +22,7 @@ class GNNBase:
     def load_model(self, save_path):
         self.logger.info('loading model')
         device = torch.device('cpu')
-        self.model.load_state_dict(torch.load(save_path, map_location=device))
+        self.model.load_state_dict(torch.load(save_path, map_location=device, weights_only=False))
 
     def save_paras(self, save_path):
         self.logger.info('saving paras')
