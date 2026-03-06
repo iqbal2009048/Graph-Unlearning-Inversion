@@ -1,5 +1,4 @@
 import torch
-from torch_sparse import SparseTensor
 
 def compute_trend_features(data, k=2):
     """
@@ -8,9 +7,9 @@ def compute_trend_features(data, k=2):
       - f1 = D^(-0.5) A D^(-0.5) f: the aggregated max of one-hop neighbors.
       - f2 = (D^(-0.5) A D^(-0.5))^2 f: two-hop aggregation.
 
-    The function creates a SparseTensor from data.edge_index with normalized weights,
-    and then applies sparse-dense matrix multiplications.
-    
+    The function builds a normalized adjacency matrix and applies sparse-dense
+    matrix multiplications using native PyTorch sparse operations.
+
     Args:
       data (torch_geometric.data.Data): Input graph data with attributes:
           - x (Tensor): Node feature matrix of shape [num_nodes, num_features].
@@ -42,20 +41,23 @@ def compute_trend_features(data, k=2):
     # 4. Compute normalized edge weights for each edge (i,j): D^{-0.5}[i] * D^{-0.5}[j].
     norm_weight = deg_inv_sqrt[row] * deg_inv_sqrt[col]
 
-    # 5. Create SparseTensor for the normalized adjacency matrix.
-    adj_t = SparseTensor(row=row, col=col, value=norm_weight, sparse_sizes=(num_nodes, num_nodes)).to(device)
+    # 5. Build a sparse COO tensor for the normalized adjacency matrix and convert
+    #    to CSR for efficient repeated sparse-dense multiplication.
+    indices = torch.stack([row, col], dim=0)
+    adj_sparse = torch.sparse_coo_tensor(
+        indices, norm_weight, size=(num_nodes, num_nodes), device=device
+    ).to_sparse_csr()
 
-    # 6. Perform the sparse matrix multiplication
-
+    # 6. Perform the sparse matrix multiplication iteratively.
     feats = [f]
     for i in range(k):
-        f = adj_t.matmul(feats[-1].view(-1, 1)).view(-1)
+        f = torch.mv(adj_sparse, feats[-1])
         feats.append(f)
 
     binary_feats = []
     for i in range(k):
-      binary_feats.append((feats[i] - feats[i+1] < 0).unsqueeze(1))
+        binary_feats.append((feats[i] - feats[i+1] < 0).unsqueeze(1))
     for i in range(k):
-      binary_feats.append((feats[i] - feats[i+1] >= 0).unsqueeze(1))
+        binary_feats.append((feats[i] - feats[i+1] >= 0).unsqueeze(1))
 
     return torch.cat(binary_feats, dim=1)

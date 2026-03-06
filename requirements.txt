@@ -1,0 +1,21 @@
+# Core deep learning
+torch>=2.0
+torch-geometric>=2.3
+
+# Optional but recommended for faster METIS graph partitioning:
+# torch-scatter and torch-sparse can be installed from source or via:
+#   pip install torch-scatter torch-sparse
+# If not installed, metis partitioning falls back to random splitting.
+
+# Graph/data utilities
+networkx>=2.6
+numpy>=1.24
+scikit-learn>=1.0
+scipy>=1.7
+tqdm>=4.62
+
+# Open Graph Benchmark (only needed for ogbn-arxiv / ogbn-products datasets)
+ogb>=1.3
+
+# Pandas (transitively required by ogb)
+pandas>=1.3

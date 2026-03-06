@@ -6,7 +6,6 @@ import shutil
 import numpy as np
 import torch
 from torch_geometric.datasets import Planetoid, Coauthor, LastFMAsia
-from ogb.nodeproppred import PygNodePropPredDataset
 import torch_geometric.transforms as T
 
 import config
@@ -107,7 +106,7 @@ class DataStore:
             dataset = LastFMAsia(config.RAW_DATA_PATH, transform=self.transform)
             data = dataset[0]
         elif self.dataset_name in ['ogbn-arxiv', 'ogbn-products']:
-            
+            from ogb.nodeproppred import PygNodePropPredDataset
             dataset = PygNodePropPredDataset(name=self.dataset_name, root='../dataset')
             ogb_data = dataset[0]
             split_idx = dataset.get_idx_split()
