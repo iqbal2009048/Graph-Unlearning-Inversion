@@ -184,7 +184,7 @@ class DataStore:
         self.logger.info('loading probs from unlearned models')
         file_path = f'run{run_id}_'.join((self.unlearn_prob_file, suffix))
         with open(file_path, 'rb') as f:
-            save_dict = torch.load(f)
+            save_dict = torch.load(f, weights_only=False)
             data.unlearn_prob = save_dict['unlearn_prob']
             data.reference_prob = save_dict['refence_prob']
 
@@ -192,7 +192,7 @@ class DataStore:
         file_path = f'run{run_id}_'.join((self.unlearned_file, suffix))
         self.logger.info('loading unlearning requests from %s' % file_path)
         with open(file_path, 'rb') as f:
-            save_dict = torch.load(f)
+            save_dict = torch.load(f, weights_only=False)
             data.edge_index_unlearn = save_dict['edge_index_unlearn']
             data.removed_edges_und = save_dict['removed_edges_und']
             data.influence_nodes = save_dict['influence_nodes']
@@ -216,13 +216,13 @@ class DataStore:
         torch.save(weight, self.optimal_weight_file + '_' + str(run))
 
     def load_optimal_weight(self, run):
-        return torch.load(self.optimal_weight_file + '_' + str(run))
+        return torch.load(self.optimal_weight_file + '_' + str(run), weights_only=False)
 
     def save_posteriors(self, posteriors, run, suffix=''):
         torch.save(posteriors, self.posteriors_file + '_' + str(run) + suffix)
 
     def load_posteriors(self, run):
-        return torch.load(self.posteriors_file + '_' + str(run))
+        return torch.load(self.posteriors_file + '_' + str(run), weights_only=False)
 
     def _extract_embedding_method(self, partition_method):
         return partition_method.split('_')[0]
