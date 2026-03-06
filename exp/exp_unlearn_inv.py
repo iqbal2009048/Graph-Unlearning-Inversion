@@ -28,6 +28,7 @@ from lib_gnn_model.sgc.sgc_net_batch import SGCNet
 from lib_gnn_model.node_classifier import NodeClassifier
 from lib_gnn_model.link_stealer import LinkStealer
 from lib_gnn_model.gnn_base import GNNBase
+from lib_gnn_model.leakage_detector import ConceptLeakageDetector
 from parameter_parser import parameter_parser
 from lib_utils import utils
 from lib_utils.partition import DatasetPartitioner
@@ -107,6 +108,10 @@ class ExpUnlearningInversion(Exp):
                     self.attack_data.reference_prob = self.shadow_reference_model.generate_unlearn_probs(ref_new_params)
                 self.attack_data.unlearn_prob = self.attack_target_model.generate_unlearn_probs(atk_new_params)
 
+                # --- Privacy evaluation hook: log leakage scores when enabled ---
+                if self.args.get('concept_leakage', False):
+                    self._log_leakage_scores(self.attack_data, atk_new_params)
+
                 # Save the unlearned probabilities
                 self.data_store.save_unlearn_prob(self.shadow_data, 'shadow', run_id)
                 self.data_store.save_unlearn_prob(self.attack_data, 'attack', run_id)
@@ -155,6 +160,76 @@ class ExpUnlearningInversion(Exp):
             '  Combined           → AUC: {auc}, Prec: {precision}, Rec: {recall}, F1: {f1}'
             .format(**res_all)
         )
+
+        # --- Privacy comparison table ---
+        if (self.args.get('concept_leakage', False)
+                or self.args.get('privacy_mask', False)
+                or self.args.get('adversarial_training', False)):
+            self._log_privacy_comparison_table(res_all)
+
+    # ------------------------------------------------------------------
+    # Privacy framework helpers
+    # ------------------------------------------------------------------
+
+    def _log_leakage_scores(self, data, new_params):
+        """Compute and log per-dimension leakage scores for the attack dataset."""
+        model = self.attack_target_model
+        device = model.device
+
+        # Build embeddings using the unlearned parameters
+        probs = model.generate_unlearn_probs(new_params)  # [N, C]
+
+        if hasattr(data, 'deleted_nodes') and len(data.deleted_nodes) > 0:
+            deleted_indicator = torch.from_numpy(
+                np.isin(np.arange(probs.shape[0]), data.deleted_nodes).astype(np.float32)
+            ).to(device)
+        else:
+            deleted_indicator = torch.zeros(probs.shape[0], device=device)
+
+        # Instantiate a temporary leakage detector if not already present
+        leakage_det = model.leakage_detector
+        if leakage_det is None:
+            leakage_det = ConceptLeakageDetector(
+                probs.shape[1],
+                hidden_dim=self.args.get('leakage_hidden_dim', 64)
+            ).to(device)
+
+        S = leakage_det(probs, deleted_indicator)
+        self.logger.info(
+            'Privacy leakage scores (per embedding dim): mean=%.4f max=%.4f min=%.4f'
+            % (S.mean().item(), S.max().item(), S.min().item())
+        )
+
+    def _log_privacy_comparison_table(self, res_all):
+        """Log a comparison table between Baseline and Proposed method."""
+        method_label = 'Proposed'
+        dataset = self.args.get('dataset_name', 'N/A')
+        model_name = self.args.get('target_model', 'N/A')
+
+        auc_val = res_all.get('auc', 'N/A')
+        f1_val = res_all.get('f1', 'N/A')
+
+        self.logger.info('')
+        self.logger.info('=' * 70)
+        self.logger.info('Privacy Framework Comparison Table')
+        self.logger.info('=' * 70)
+        self.logger.info(
+            '%-10s %-6s %-10s %-12s %-10s'
+            % ('Dataset', 'Model', 'Method', 'Attack AUC', 'Attack F1')
+        )
+        self.logger.info('-' * 70)
+        self.logger.info(
+            '%-10s %-6s %-10s %-12s %-10s'
+            % (dataset, model_name, 'Baseline', '(run baseline without privacy flags)', '')
+        )
+        self.logger.info(
+            '%-10s %-6s %-10s %-12s %-10s'
+            % (dataset, model_name, method_label, auc_val, f1_val)
+        )
+        self.logger.info('=' * 70)
+        self.logger.info('')
+
+    # ------------------------------------------------------------------
 
     def load_data(self):
         self.data = self.data_store.load_raw_data()
