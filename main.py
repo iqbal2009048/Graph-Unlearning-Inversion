@@ -48,8 +48,9 @@ if __name__ == "__main__":
     logging.info(logger_name)
 
     torch.set_num_threads(args["num_threads"])
-    torch.cuda.set_device(args["cuda"])
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(args["cuda"])
+    if torch.cuda.is_available():
+        torch.cuda.set_device(args["cuda"])
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(args["cuda"])
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
     if args["exp"].lower() == "unlearn":
