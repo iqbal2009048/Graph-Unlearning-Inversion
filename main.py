@@ -1,14 +1,6 @@
 import logging
 import os
-import torch
 import sys
-import numpy as np
-import random
-
-from exp.exp_GIF import ExpGraphInfluenceFunction
-from exp.exp_attack import ExpAttack
-from exp.exp_retrain import ExpRetraining
-from exp.exp_unlearn_inv import ExpUnlearningInversion
 
 from parameter_parser import parameter_parser
 
@@ -39,6 +31,14 @@ def config_logger(save_name):
 
 if __name__ == "__main__":
     args = parameter_parser()
+
+    import torch
+    import numpy as np
+    import random
+    from exp.exp_GIF import ExpGraphInfluenceFunction
+    from exp.exp_attack import ExpAttack
+    from exp.exp_retrain import ExpRetraining
+    from exp.exp_unlearn_inv import ExpUnlearningInversion
 
     _set_random_seed(20221012)
 
