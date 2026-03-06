@@ -22,6 +22,10 @@ from lib_gnn_model.gcn.gcn_net_batch import GCNNet
 from lib_gnn_model.sgc.sgc_net_batch import SGCNet
 from lib_gnn_model.mlp import MLPNet
 from lib_gnn_model.gnn_base import GNNBase
+from lib_gnn_model.leakage_detector import ConceptLeakageDetector
+from lib_gnn_model.privacy_mask import KANPrivacyMask
+from lib_gnn_model.privacy_transform import PrivacyCertifiedTransform
+from lib_gnn_model.adversarial_inverter import AdversarialInverter
 from parameter_parser import parameter_parser
 from lib_utils import utils
 
@@ -41,6 +45,50 @@ class NodeClassifier(GNNBase):
         self.num_feats = num_feats
         self.model = self.determine_model(num_feats, num_classes).to(self.device)
         self.data = data
+
+        # --- Privacy framework components (only allocated when flags are set) ---
+        embed_dim = num_classes  # GNN output logits dimension used as proxy embedding dim
+
+        if args.get('concept_leakage', False):
+            self.leakage_detector = ConceptLeakageDetector(
+                embed_dim, hidden_dim=args.get('leakage_hidden_dim', 64)
+            ).to(self.device)
+        else:
+            self.leakage_detector = None
+
+        if args.get('privacy_mask', False):
+            self.privacy_mask_layer = KANPrivacyMask(
+                embed_dim, alpha=args.get('privacy_mask_alpha', 0.5)
+            ).to(self.device)
+        else:
+            self.privacy_mask_layer = None
+
+        if args.get('adversarial_training', False):
+            self.privacy_transform = PrivacyCertifiedTransform(
+                embed_dim, hidden_dim=args.get('mine_hidden_dim', 64)
+            ).to(self.device)
+            self.adversarial_inverter = AdversarialInverter(
+                embed_dim=embed_dim,
+                feat_dim=num_feats,
+                hidden_dim=args.get('adv_hidden_dim', 128),
+            ).to(self.device)
+        else:
+            self.privacy_transform = None
+            self.adversarial_inverter = None
+
+        # Build a single optimizer for all privacy component parameters
+        privacy_params = []
+        if self.leakage_detector is not None:
+            privacy_params += list(self.leakage_detector.parameters())
+        if self.privacy_mask_layer is not None:
+            privacy_params += list(self.privacy_mask_layer.parameters())
+        if self.privacy_transform is not None:
+            privacy_params += list(self.privacy_transform.parameters())
+        if self.adversarial_inverter is not None:
+            privacy_params += list(self.adversarial_inverter.parameters())
+
+        # Will be None when no privacy components are active
+        self._privacy_params = privacy_params
 
     def determine_model(self, num_feats, num_classes):
         self.logger.info('target model: %s' % (self.args['target_model'],))
@@ -76,6 +124,9 @@ class NodeClassifier(GNNBase):
 
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.decay)
 
+        if self._privacy_params:
+            privacy_optimizer = torch.optim.Adam(self._privacy_params, lr=self.lr, weight_decay=self.decay)
+
         for epoch in range(self.args['num_epochs']):
             self.logger.info('epoch %s' % (epoch,))
 
@@ -104,6 +155,64 @@ class NodeClassifier(GNNBase):
                         noise_term = noise_term + torch.sum(b * param)
 
                     loss = loss + noise_term
+
+                # --- Privacy framework losses (gated behind CLI flags) ---
+                privacy_loss_total = torch.tensor(0.0, device=self.device)
+
+                use_privacy = (
+                    self.args.get('concept_leakage', False)
+                    or self.args.get('privacy_mask', False)
+                    or self.args.get('adversarial_training', False)
+                )
+
+                if use_privacy:
+                    # Build deleted-node indicator for the current mini-batch
+                    n_id_np = n_id.cpu().numpy()
+                    if hasattr(self.data, 'deleted_nodes') and len(self.data.deleted_nodes) > 0:
+                        deleted_indicator = torch.from_numpy(
+                            np.isin(n_id_np, self.data.deleted_nodes).astype(np.float32)
+                        ).to(self.device)
+                    else:
+                        deleted_indicator = torch.zeros(len(n_id_np), device=self.device)
+
+                    # Privacy losses are computed on detached logits to keep
+                    # privacy heads and the GNN encoder on separate gradient paths.
+                    # The adversarial inverter uses a GradientReversalLayer so
+                    # its reconstruction loss flows back as an *encoder* penalty.
+                    Z = out.detach()
+
+                    # Step 1: Compute leakage scores
+                    if self.leakage_detector is not None:
+                        S = self.leakage_detector(Z, deleted_indicator[:batch_size])
+                    else:
+                        S = None
+
+                    # Step 2: Apply privacy mask
+                    if self.privacy_mask_layer is not None and S is not None:
+                        Z = self.privacy_mask_layer(Z, S)
+
+                    # Step 3: Privacy-certified transform + MI penalty
+                    if self.privacy_transform is not None:
+                        Z_transformed = self.privacy_transform(Z)
+                        mi_loss = self.privacy_transform.privacy_loss(
+                            Z_transformed, deleted_indicator[:batch_size]
+                        )
+                        privacy_loss_total = privacy_loss_total + self.args.get('beta_mi', 0.01) * mi_loss
+                    else:
+                        Z_transformed = Z
+
+                    # Step 4: Adversarial reconstruction loss
+                    if self.adversarial_inverter is not None:
+                        X_batch = self.data.x[n_id[:batch_size]].to(self.device)
+                        adv_loss = self.adversarial_inverter.attack_loss(Z_transformed, X_batch)
+                        privacy_loss_total = (
+                            privacy_loss_total + self.args.get('lambda_adv', 0.1) * adv_loss
+                        )
+
+                    if self._privacy_params:
+                        privacy_optimizer.zero_grad()
+                        privacy_loss_total.backward()
+                        privacy_optimizer.step()
 
                 loss.backward()
                 optimizer.step()
@@ -255,8 +364,24 @@ class NodeClassifier(GNNBase):
                 out = self.model.forward_once(self.data, self.edge_weight)
             else:
                 out = self.model.forward_once(self.data)
-        
-        return torch.exp(out)
+
+        probs = torch.exp(out)
+
+        # Conditionally apply privacy mask to posteriors when enabled
+        if self.args.get('privacy_mask', False) and self.privacy_mask_layer is not None:
+            if self.args.get('concept_leakage', False) and self.leakage_detector is not None:
+                if hasattr(self.data, 'deleted_nodes') and len(self.data.deleted_nodes) > 0:
+                    deleted_indicator = torch.from_numpy(
+                        np.isin(np.arange(probs.shape[0]), self.data.deleted_nodes).astype(np.float32)
+                    ).to(self.device)
+                else:
+                    deleted_indicator = torch.zeros(probs.shape[0], device=self.device)
+                S = self.leakage_detector(probs, deleted_indicator)
+            else:
+                S = torch.ones(probs.shape[1], device=self.device) * 0.5
+            probs = self.privacy_mask_layer(probs, S)
+
+        return probs
 
     @torch.no_grad()
     def evaluate_model(self):

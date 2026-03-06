@@ -78,6 +78,31 @@ def parameter_parser():
     
     # Save intermediate data for external LP baselines
     parser.add_argument('--export_data', type=str2bool, default=False, help='Export data without running the attack')
+
+    ########################## Privacy framework flags ###########################
+    parser.add_argument('--concept_leakage', action='store_true', default=False,
+                        help='Enable concept leakage detection')
+    parser.add_argument('--privacy_mask', action='store_true', default=False,
+                        help='Enable KAN privacy mask layer')
+    parser.add_argument('--adversarial_training', action='store_true', default=False,
+                        help='Enable adversarial inversion training')
+
+    ########################## Privacy hyperparameters ###########################
+    parser.add_argument('--lambda_adv', type=float, default=0.1,
+                        help='Weight for adversarial attack loss in total loss')
+    parser.add_argument('--beta_mi', type=float, default=0.01,
+                        help='Weight for MINE mutual information privacy loss')
+    parser.add_argument('--leakage_hidden_dim', type=int, default=64,
+                        help='Hidden dimension of the concept leakage detector MLP')
+    parser.add_argument('--privacy_mask_alpha', type=float, default=0.5,
+                        help='Alpha scaling factor for the KAN privacy mask')
+    parser.add_argument('--mine_hidden_dim', type=int, default=64,
+                        help='Hidden dimension of the MINE estimator')
+    parser.add_argument('--adv_hidden_dim', type=int, default=128,
+                        help='Hidden dimension of the adversarial inverter decoder')
+    parser.add_argument('--adv_inner_steps', type=int, default=3,
+                        help='Number of inner adversarial update steps per epoch')
+
     args = vars(parser.parse_args())
 
     return args
